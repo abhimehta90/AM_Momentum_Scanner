@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Scanner output (regenerated each run)
+site/
+/sessions/
+AM_Watch_Report_*.html
+AM_Watch_Report_*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
