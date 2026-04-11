@@ -903,15 +903,25 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   ::-webkit-scrollbar-thumb:hover { background:#3a4358 }
   ::-webkit-scrollbar-corner    { background:#0f1419 }
 
-  /* ----- Force dark form controls across all browsers ----- */
+  /* ----- Force dark form controls across all browsers -----
+     Use a muted off-white (#cbd3e0) so native bright-white
+     dark-mode rendering doesn't leak through on Chromium. */
   select, input, button, textarea {
-    color:var(--ink); background-color:#0f1419;
+    color:#cbd3e0; -webkit-text-fill-color:#cbd3e0;
+    background-color:#0f1419;
     font-family:inherit;
   }
   select option {
-    background:#1a1f2e; color:var(--ink);
+    background:#0f1419; color:#cbd3e0;
   }
   select:focus, input:focus, textarea:focus { outline:none }
+  /* Kill Chromium's autofill / dark-mode select override */
+  select, input { -webkit-text-fill-color:#cbd3e0 !important }
+  .controls button, .controls button.primary,
+  .modal button, .modal button.primary,
+  .settings-actions button, .tf-toggle button, .tab {
+    -webkit-text-fill-color:inherit !important;
+  }
   html, body { height:100%; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:14px/1.5 -apple-system,Segoe UI,Inter,system-ui,sans-serif;
@@ -1053,17 +1063,35 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
     box-shadow:inset 0 0 0 1px rgba(59,130,246,0.3);
   }
   .tf-toggle button:hover:not(.on) { color:#cbd3e0 }
-  .controls { padding:10px 32px 12px; display:flex; gap:10px; flex-wrap:wrap;
+  .controls { padding:10px 32px 12px; display:flex; gap:8px; flex-wrap:wrap;
     align-items:center; background:var(--panel);
     border-left:1px solid var(--line); border-right:1px solid var(--line);
     border-top:1px solid var(--line); }
   .controls input, .controls select, .controls button {
-    background:#0f1419; border:1px solid var(--line); color:var(--ink);
+    background:#0f1419; border:1px solid var(--line); color:#cbd3e0;
     padding:7px 11px; border-radius:7px; font-size:12.5px; outline:none;
-    font-family:inherit }
+    font-family:inherit; line-height:1.3;
+    -webkit-appearance:none; -moz-appearance:none; appearance:none;
+    -webkit-text-fill-color:#cbd3e0;
+  }
+  .controls input::placeholder { color:var(--mute); opacity:1 }
+  .controls select {
+    /* Custom dropdown arrow — identical across all browsers */
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='%238b95a7' d='M2 4l4 4 4-4z'/></svg>");
+    background-repeat:no-repeat;
+    background-position:right 9px center;
+    padding-right:28px;
+    cursor:pointer;
+  }
+  .controls select option {
+    background:#0f1419; color:#cbd3e0;
+  }
   .controls input:focus, .controls select:focus, .controls button:hover {
     border-color:var(--blue) }
-  .controls button { cursor:pointer; background:#1e3a5f; font-weight:600 }
+  .controls button {
+    cursor:pointer; background:#1e3a5f; color:#e8eaed;
+    -webkit-text-fill-color:#e8eaed; font-weight:600;
+  }
   .controls button.primary { background:#1e40af; border-color:#3b82f6 }
   .controls button.primary:hover { background:#2563eb }
   .controls .sep { color:var(--mute); font-size:12px }
@@ -1260,8 +1288,10 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   .wcol label .mute { color:var(--mute); font-size:11px; margin-left:6px }
   .wcol input[type="number"] {
     width:56px; background:#0f1419; border:1px solid var(--line);
-    color:#e8eaed; padding:4px 6px; border-radius:5px; font-size:12px;
+    color:#e8eaed; -webkit-text-fill-color:#e8eaed;
+    padding:4px 6px; border-radius:5px; font-size:12px;
     text-align:right; font-variant-numeric:tabular-nums; outline:none;
+    -webkit-appearance:none; -moz-appearance:textfield; appearance:textfield;
   }
   .wcol input[type="number"]:focus { border-color:var(--blue) }
   .settings-actions {
@@ -1332,7 +1362,7 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 
 <!-- Controls bar -->
 <div class="controls">
-  <input id="q" placeholder="Search…" oninput="render()" style="min-width:160px">
+  <input id="q" placeholder="Search…" oninput="render()" style="width:140px">
   <select id="cat" onchange="render()">
     <option value="">All categories</option>
     <option>Strong Buy</option><option>Watch</option>
@@ -1346,7 +1376,7 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
     <option value="ticker">Sort: Ticker A–Z</option>
   </select>
   <span class="sep" id="wlOnly">|</span>
-  <select id="addDD" style="min-width:240px"></select>
+  <select id="addDD" style="min-width:210px; max-width:280px"></select>
   <button class="primary" onclick="addTicker()">+ Add to watchlist</button>
   <button onclick="resetWatchlist()">Reset WL</button>
   <span class="sep" id="sbOnly" style="display:none">|</span>
