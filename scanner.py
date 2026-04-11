@@ -875,7 +875,15 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 
     html = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>Scanner · __STAMP__</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Momentum Board</title>
+<meta name="description" content="Nifty 500 momentum scanner — BB · MACD · ADX signals">
+<meta property="og:title" content="Momentum Board">
+<meta property="og:description" content="Nifty 500 momentum scanner — BB · MACD · ADX signals">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Momentum Board">
+<meta name="twitter:description" content="Nifty 500 momentum scanner — BB · MACD · ADX signals">
 <style>
   :root {
     --bg:#0f1419; --panel:#1a1f2e; --ink:#e8eaed; --mute:#8b95a7;
