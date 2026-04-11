@@ -44,6 +44,7 @@ SNAPSHOT_DIR  = BASE_DIR / ".scanner_snapshots"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 STAMP         = dt.datetime.now().strftime("%Y-%m-%d")
+STAMP_HUMAN   = dt.datetime.now().strftime("%A, %-d %b %Y")
 
 # ATR stop loss multiplier (close - ATR_MULT * ATR)
 ATR_MULT = 2.0
@@ -902,6 +903,16 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
     background:linear-gradient(180deg,#1a1f2e,#0f1419);
     font-size:11px; color:var(--mute);
   }
+  .topbar .brand {
+    font-size:14px; font-weight:700; color:var(--ink);
+    letter-spacing:-0.2px;
+  }
+  .topbar .brand-dot {
+    display:inline-block; width:6px; height:6px; border-radius:50%;
+    background:var(--blue); margin-right:8px; vertical-align:middle;
+    box-shadow:0 0 8px rgba(59,130,246,0.6);
+  }
+  .topbar .sep { color:#3a4358; margin:0 4px }
   .topbar .dstamp { font-variant-numeric:tabular-nums; letter-spacing:0.2px }
   .topbar .spacer { flex:1 }
   .topbar .sync-state { font-size:10.5px; color:var(--mute); min-width:0; white-space:nowrap }
@@ -1248,7 +1259,9 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 </style></head>
 <body>
 <div class="topbar">
-  <span class="dstamp">__STAMP__</span>
+  <span class="brand"><span class="brand-dot"></span>Momentum Board</span>
+  <span class="sep">·</span>
+  <span class="dstamp">__STAMP_HUMAN__</span>
   <span class="spacer"></span>
   <span id="syncState" class="sync-state"></span>
   <button class="icon-btn" onclick="openSyncDialog()" title="Cross-device sync settings">⇄</button>
@@ -2191,6 +2204,7 @@ syncPullOnLoad();
 </body></html>"""
 
     html = (html
+        .replace("__STAMP_HUMAN__", STAMP_HUMAN)
         .replace("__STAMP__", STAMP)
         .replace("__DATA__", payload_json)
         .replace("__WATCHLIST__", watchlist_json)
