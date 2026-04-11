@@ -875,7 +875,7 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 
     html = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AM_Watch Scanner — __STAMP__</title>
+<title>Scanner · __STAMP__</title>
 <style>
   :root {
     --bg:#0f1419; --panel:#1a1f2e; --ink:#e8eaed; --mute:#8b95a7;
@@ -887,11 +887,76 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   body { margin:0; background:var(--bg); color:var(--ink);
     font:14px/1.5 -apple-system,Segoe UI,Inter,system-ui,sans-serif;
     display:flex; flex-direction:column; overflow:hidden; }
-  header, .breadth-row, .tabs-row, .controls, footer { flex-shrink:0 }
-  header { padding:18px 32px 14px; border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg,#1a1f2e,#0f1419) }
-  h1 { margin:0 0 4px; font-size:21px; letter-spacing:-0.3px }
-  .sub { color:var(--mute); font-size:12.5px }
+  .topbar, .breadth-row, .tabs-row, .controls, footer { flex-shrink:0 }
+  .topbar {
+    display:flex; align-items:center; gap:10px;
+    padding:8px 32px; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#1a1f2e,#0f1419);
+    font-size:11px; color:var(--mute);
+  }
+  .topbar .dstamp { font-variant-numeric:tabular-nums; letter-spacing:0.2px }
+  .topbar .spacer { flex:1 }
+  .topbar .sync-state { font-size:10.5px; color:var(--mute); min-width:0; white-space:nowrap }
+  .topbar .sync-state.ok   { color:#4ade80 }
+  .topbar .sync-state.err  { color:#f87171 }
+  .topbar .sync-state.busy { color:#fbbf24 }
+  .topbar .icon-btn {
+    background:transparent; border:1px solid var(--line); color:#cbd3e0;
+    width:26px; height:22px; border-radius:5px; font-size:13px;
+    cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
+  }
+  .topbar .icon-btn:hover { border-color:var(--blue); color:var(--ink) }
+
+  /* ---------- Sync dialog (modal) ---------- */
+  .modal-bg {
+    position:fixed; inset:0; background:rgba(0,0,0,0.55);
+    display:none; align-items:center; justify-content:center; z-index:10000;
+  }
+  .modal-bg.open { display:flex }
+  .modal {
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:22px 24px; width:420px; max-width:92vw;
+    box-shadow:0 20px 60px rgba(0,0,0,0.7);
+  }
+  .modal h3 { margin:0 0 6px; font-size:15px; color:var(--ink) }
+  .modal .sub { color:var(--mute); font-size:11.5px; line-height:1.55; margin-bottom:14px }
+  .modal label {
+    display:block; font-size:11px; color:var(--mute);
+    text-transform:uppercase; letter-spacing:0.4px; margin:10px 0 4px;
+  }
+  .modal input {
+    width:100%; background:#0f1419; border:1px solid var(--line);
+    color:var(--ink); padding:8px 10px; border-radius:6px;
+    font:12px/1.4 'SF Mono',Menlo,Monaco,monospace; outline:none;
+    box-sizing:border-box;
+  }
+  .modal input:focus { border-color:var(--blue) }
+  .modal .row-btns {
+    display:flex; gap:8px; margin-top:18px; align-items:center;
+  }
+  .modal .row-btns .spacer { flex:1 }
+  .modal button {
+    background:#1e3a5f; border:1px solid var(--line); color:var(--ink);
+    padding:8px 14px; border-radius:7px; font-size:12px; cursor:pointer;
+    font-family:inherit; font-weight:600;
+  }
+  .modal button:hover { border-color:var(--blue) }
+  .modal button.primary { background:#2563eb; border-color:#2563eb }
+  .modal button.danger  { background:#3a1e1e; border-color:#5b2a2a; color:#fca5a5 }
+  .modal .msg { font-size:11px; color:var(--mute); margin-top:10px; min-height:14px }
+  .modal .msg.ok   { color:#4ade80 }
+  .modal .msg.err  { color:#f87171 }
+  .modal .help {
+    font-size:10.5px; color:var(--mute); line-height:1.6;
+    background:#0b1017; border:1px dashed var(--line);
+    border-radius:6px; padding:10px 12px; margin-top:14px;
+  }
+  .modal .help a { color:#60a5fa; text-decoration:none }
+  .modal .help a:hover { text-decoration:underline }
+  .modal .help code {
+    background:#0f1419; padding:1px 5px; border-radius:3px;
+    font:10.5px 'SF Mono',Menlo,monospace; color:#cbd3e0;
+  }
 
   /* ---------- Breadth strip (market context bar) ---------- */
   .breadth-row {
@@ -1174,13 +1239,37 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   .settings-actions .status b { color:#4ade80 }
 </style></head>
 <body>
-<header>
-  <h1>AM_Watch Technical Scanner <span style="color:#8b95a7;font-weight:400;font-size:14px">v2</span></h1>
-  <div class="sub">
-    __STAMP__ · BB %b(50,ohlc4,2) · MACD(3,21,9) · ADX(DI=14, SMA14 smoothing) ·
-    Weights BB <span data-gwlbl="BB">30</span>% / MACD <span data-gwlbl="MACD">40</span>% / ADX <span data-gwlbl="ADX">30</span>% · Nifty 500 universe
+<div class="topbar">
+  <span class="dstamp">__STAMP__</span>
+  <span class="spacer"></span>
+  <span id="syncState" class="sync-state"></span>
+  <button class="icon-btn" onclick="openSyncDialog()" title="Cross-device sync settings">⇄</button>
+</div>
+
+<!-- Sync dialog -->
+<div class="modal-bg" id="syncModal" onclick="if(event.target===this)closeSyncDialog()">
+  <div class="modal">
+    <h3>Cross-device watchlist sync</h3>
+    <div class="sub">Syncs your watchlist between phone, tablet, and desktop via a private GitHub Gist. Paste the same Gist ID + token on every device.</div>
+    <label>Gist ID</label>
+    <input id="syncGistId" placeholder="e.g. 3f2a5b9c0d8e1a2b3c4d">
+    <label>Personal access token (gist scope)</label>
+    <input id="syncToken" placeholder="ghp_... or github_pat_...">
+    <div class="msg" id="syncMsg"></div>
+    <div class="help">
+      <b>One-time setup:</b><br>
+      1. Create a secret gist at <a href="https://gist.github.com" target="_blank">gist.github.com</a> with filename <code>watchlist.json</code> and body <code>[]</code>. Copy the long ID from its URL.<br>
+      2. Create a classic token at <a href="https://github.com/settings/tokens/new?scopes=gist&description=watchlist-sync" target="_blank">github.com/settings/tokens</a> — check only <code>gist</code> scope. Copy the token (shown once).<br>
+      3. Paste both above and hit Save. Repeat on every device with the same values.
+    </div>
+    <div class="row-btns">
+      <button class="danger" onclick="disableSync()" id="syncDisableBtn">Disable sync</button>
+      <span class="spacer"></span>
+      <button onclick="closeSyncDialog()">Cancel</button>
+      <button class="primary" onclick="saveSyncConfig()">Save & test</button>
+    </div>
   </div>
-</header>
+</div>
 
 <!-- Market breadth strip -->
 <div class="breadth-row" id="breadthRow"></div>
@@ -1321,12 +1410,15 @@ const DATA      = __DATA__;
 const DEFAULT_WL= __WATCHLIST__;
 const BREADTH   = __BREADTH__;
 const SECTORS   = __SECTORS__;
-const STAMP     = "__STAMP__";
-const LS_KEY    = "am_watch_v2";
-const LS_W_KEY  = "am_watch_v2_weights";
-const LS_GW_KEY = "am_watch_v2_gweights";
-const LS_TAB    = "am_watch_v2_tab";
-const LS_TF     = "am_watch_v2_tf";
+const STAMP         = "__STAMP__";
+const LS_KEY        = "am_watch_v2";
+const LS_W_KEY      = "am_watch_v2_weights";
+const LS_GW_KEY     = "am_watch_v2_gweights";
+const LS_TAB        = "am_watch_v2_tab";
+const LS_TF         = "am_watch_v2_tf";
+const LS_SYNC_GIST  = "am_watch_v2_sync_gist";
+const LS_SYNC_TOKEN = "am_watch_v2_sync_token";
+const LS_SYNC_TS    = "am_watch_v2_sync_ts";
 // -------- View state --------
 let TAB = localStorage.getItem(LS_TAB) || "wl";   // wl | sb
 let TF  = localStorage.getItem(LS_TF)  || "d";    // d | w
@@ -1515,6 +1607,8 @@ function loadWL() {
 function saveWL(wl) {
   localStorage.setItem(LS_KEY, JSON.stringify(wl));
   flashSaved();
+  // Push to sync (debounced) if configured
+  if (typeof syncPushDebounced === "function") syncPushDebounced();
 }
 function flashSaved() {
   const t = document.getElementById("savedTag");
@@ -1905,6 +1999,173 @@ function resetWeights() {
 document.addEventListener('change', onWeightChange);
 document.addEventListener('input',  onWeightChange);
 
+// ------------------------------------------------------------------
+// Cross-device watchlist sync via GitHub Gist
+// ------------------------------------------------------------------
+function syncConfigured() {
+  return !!(localStorage.getItem(LS_SYNC_GIST) && localStorage.getItem(LS_SYNC_TOKEN));
+}
+function setSyncBadge(state, label) {
+  const el = document.getElementById("syncState");
+  if (!el) return;
+  el.className = "sync-state " + (state || "");
+  el.textContent = label || "";
+}
+async function syncFetch() {
+  const gid = localStorage.getItem(LS_SYNC_GIST);
+  const tok = localStorage.getItem(LS_SYNC_TOKEN);
+  if (!gid || !tok) return { ok:false, reason:"not-configured" };
+  try {
+    const r = await fetch("https://api.github.com/gists/" + gid, {
+      headers: { "Authorization": "token " + tok, "Accept": "application/vnd.github+json" }
+    });
+    if (!r.ok) return { ok:false, reason: "HTTP " + r.status };
+    const j = await r.json();
+    const file = j.files && (j.files["watchlist.json"] || Object.values(j.files)[0]);
+    if (!file) return { ok:false, reason:"no file in gist" };
+    let body = file.content;
+    if (file.truncated && file.raw_url) {
+      const r2 = await fetch(file.raw_url);
+      body = await r2.text();
+    }
+    const data = JSON.parse(body || "[]");
+    // Accept either a plain array or { watchlist:[...], ts:123 }
+    if (Array.isArray(data)) return { ok:true, wl:data, ts:0 };
+    return { ok:true, wl:(data.watchlist || []), ts:(data.ts || 0) };
+  } catch (e) {
+    return { ok:false, reason: e.message };
+  }
+}
+async function syncPush() {
+  const gid = localStorage.getItem(LS_SYNC_GIST);
+  const tok = localStorage.getItem(LS_SYNC_TOKEN);
+  if (!gid || !tok) return { ok:false };
+  const payload = { watchlist: watchlist, ts: Date.now() };
+  setSyncBadge("busy", "↻ syncing…");
+  try {
+    const r = await fetch("https://api.github.com/gists/" + gid, {
+      method: "PATCH",
+      headers: {
+        "Authorization": "token " + tok,
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        files: { "watchlist.json": { content: JSON.stringify(payload, null, 2) } }
+      })
+    });
+    if (!r.ok) {
+      setSyncBadge("err", "✗ sync failed (" + r.status + ")");
+      return { ok:false };
+    }
+    localStorage.setItem(LS_SYNC_TS, String(payload.ts));
+    const t = new Date(payload.ts);
+    const hm = t.toTimeString().slice(0,5);
+    setSyncBadge("ok", "✓ synced " + hm);
+    return { ok:true };
+  } catch (e) {
+    setSyncBadge("err", "✗ sync error");
+    return { ok:false };
+  }
+}
+let _syncPushTimer = null;
+function syncPushDebounced() {
+  if (!syncConfigured()) return;
+  clearTimeout(_syncPushTimer);
+  _syncPushTimer = setTimeout(syncPush, 600);
+}
+async function syncPullOnLoad() {
+  if (!syncConfigured()) return;
+  setSyncBadge("busy", "↻ pulling…");
+  const res = await syncFetch();
+  if (!res.ok) {
+    setSyncBadge("err", "✗ sync offline");
+    return;
+  }
+  // Remote wins on load
+  watchlist = res.wl || [];
+  localStorage.setItem(LS_KEY, JSON.stringify(watchlist));
+  const hm = res.ts ? new Date(res.ts).toTimeString().slice(0,5) : "";
+  setSyncBadge("ok", "✓ synced" + (hm ? " " + hm : ""));
+  buildDropdown();
+  renderBreadth();
+  render();
+}
+
+// Modal UI ----------------------------------------------------------
+function openSyncDialog() {
+  document.getElementById("syncGistId").value = localStorage.getItem(LS_SYNC_GIST) || "";
+  document.getElementById("syncToken").value  = localStorage.getItem(LS_SYNC_TOKEN) || "";
+  const msg = document.getElementById("syncMsg");
+  msg.className = "msg";
+  msg.textContent = syncConfigured()
+    ? "Sync is currently ENABLED. Leave fields as-is and click Cancel, or update them."
+    : "Sync is currently disabled.";
+  document.getElementById("syncDisableBtn").style.display = syncConfigured() ? "" : "none";
+  document.getElementById("syncModal").classList.add("open");
+}
+function closeSyncDialog() {
+  document.getElementById("syncModal").classList.remove("open");
+}
+async function saveSyncConfig() {
+  const gid = document.getElementById("syncGistId").value.trim();
+  const tok = document.getElementById("syncToken").value.trim();
+  const msg = document.getElementById("syncMsg");
+  if (!gid || !tok) {
+    msg.className = "msg err";
+    msg.textContent = "Both fields are required.";
+    return;
+  }
+  localStorage.setItem(LS_SYNC_GIST, gid);
+  localStorage.setItem(LS_SYNC_TOKEN, tok);
+  msg.className = "msg";
+  msg.textContent = "Testing connection…";
+  const res = await syncFetch();
+  if (!res.ok) {
+    msg.className = "msg err";
+    msg.textContent = "Failed: " + (res.reason || "unknown") + ". Check the Gist ID and token.";
+    setSyncBadge("err", "✗ sync offline");
+    return;
+  }
+  // If remote has an existing watchlist, offer to pull it; otherwise push local.
+  if (Array.isArray(res.wl) && res.wl.length > 0) {
+    const same = JSON.stringify([...res.wl].sort()) === JSON.stringify([...watchlist].sort());
+    if (!same) {
+      const pull = confirm(
+        "Remote gist has " + res.wl.length + " tickers; local has " + watchlist.length + ".\n\n" +
+        "OK  = pull remote and replace local\n" +
+        "Cancel = push local and overwrite remote"
+      );
+      if (pull) {
+        watchlist = res.wl;
+        localStorage.setItem(LS_KEY, JSON.stringify(watchlist));
+        buildDropdown();
+        renderBreadth();
+        render();
+      } else {
+        await syncPush();
+      }
+    }
+  } else {
+    // Remote empty — push our local
+    await syncPush();
+  }
+  msg.className = "msg ok";
+  msg.textContent = "✓ Sync enabled. Watchlist is now shared across devices.";
+  setSyncBadge("ok", "✓ synced");
+  document.getElementById("syncDisableBtn").style.display = "";
+  setTimeout(closeSyncDialog, 900);
+}
+function disableSync() {
+  if (!confirm("Disable sync on THIS device? Your remote gist is untouched; other devices keep syncing.")) return;
+  localStorage.removeItem(LS_SYNC_GIST);
+  localStorage.removeItem(LS_SYNC_TOKEN);
+  localStorage.removeItem(LS_SYNC_TS);
+  setSyncBadge("", "");
+  document.getElementById("syncMsg").textContent = "Sync disabled on this device.";
+  document.getElementById("syncDisableBtn").style.display = "none";
+}
+
 syncInputs();
 buildDropdown();
 buildSectorDropdown();
@@ -1915,6 +2176,9 @@ document.getElementById("tfW").classList.toggle("on", TF === "w");
 setTab(TAB);   // this calls renderHeader + render
 // Strong Buy minimum score listener
 document.getElementById("sbMin").addEventListener("input", () => render());
+
+// Pull remote watchlist on load if sync is configured
+syncPullOnLoad();
 </script>
 </body></html>"""
 
