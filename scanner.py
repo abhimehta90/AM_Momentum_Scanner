@@ -887,11 +887,31 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 <meta name="twitter:description" content="Nifty 500 momentum scanner — BB · MACD · ADX signals">
 <style>
   :root {
+    color-scheme: dark;
     --bg:#0f1419; --panel:#1a1f2e; --ink:#e8eaed; --mute:#8b95a7;
     --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --blue:#3b82f6;
     --line:#2a3142;
   }
   * { box-sizing:border-box }
+
+  /* ----- Cross-browser dark scrollbars (belt-and-suspenders to color-scheme) ----- */
+  html { scrollbar-color: #2a3142 #0f1419; scrollbar-width: thin }
+  ::-webkit-scrollbar           { width:10px; height:10px }
+  ::-webkit-scrollbar-track     { background:#0f1419 }
+  ::-webkit-scrollbar-thumb     { background:#2a3142; border-radius:6px;
+                                  border:2px solid #0f1419 }
+  ::-webkit-scrollbar-thumb:hover { background:#3a4358 }
+  ::-webkit-scrollbar-corner    { background:#0f1419 }
+
+  /* ----- Force dark form controls across all browsers ----- */
+  select, input, button, textarea {
+    color:var(--ink); background-color:#0f1419;
+    font-family:inherit;
+  }
+  select option {
+    background:#1a1f2e; color:var(--ink);
+  }
+  select:focus, input:focus, textarea:focus { outline:none }
   html, body { height:100%; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:14px/1.5 -apple-system,Segoe UI,Inter,system-ui,sans-serif;
