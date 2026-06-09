@@ -584,6 +584,11 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
         ret_pct = round((curr_close - entry_open) / entry_open * 100, 2)
         days_held = len(ohlc) - 1 - sig_idx  # trading days since signal
 
+        # Peak high price from entry day onward
+        highs_since = ohlc.iloc[entry_idx:]["High"]
+        peak_high = float(highs_since.max()) if len(highs_since) > 0 and not highs_since.isna().all() else entry_open
+        peak_ret = round((peak_high - entry_open) / entry_open * 100, 2)
+
         scorecard.append({
             "t":    ticker,
             "n":    name_of.get(ticker, ticker),
@@ -591,6 +596,8 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
             "ed":   entry_date,
             "ep":   round(entry_open, 2),
             "cp":   round(curr_close, 2),
+            "hp":   round(peak_high, 2),
+            "pr":   peak_ret,
             "ret":  ret_pct,
             "dh":   days_held,
             "ss":   sig["signal_score"],
@@ -1562,7 +1569,7 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 <!-- Signal Scorecard (hidden by default, shown when tab=sc) -->
 <div class="wrap" id="scorecardWrap" style="display:none">
   <div class="sc-summary" id="scSummary"></div>
-  <div class="tbl-host">
+  <div class="tbl-host" style="overflow-y:auto;max-height:calc(100vh - 220px)">
     <table class="ftbl sc-tbl" id="scTable">
       <thead>
         <tr>
@@ -1572,6 +1579,8 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
           <th style="width:90px" data-tip="Next trading day — assumed entry at open">Entry Date</th>
           <th style="width:80px;text-align:right">Entry &#8377;</th>
           <th style="width:80px;text-align:right">Now &#8377;</th>
+          <th style="width:80px;text-align:right" data-tip="Highest price reached since entry">High &#8377;</th>
+          <th style="width:70px;text-align:right" data-tip="Peak return from entry to highest price">Peak %</th>
           <th style="width:75px;text-align:right" data-tip="Return if you bought at next-day open and held till now">Return %</th>
           <th style="width:60px;text-align:center" data-tip="Trading days since entry">Days</th>
           <th style="width:60px;text-align:center" data-tip="Composite score when signal fired">Score</th>
@@ -2177,7 +2186,7 @@ function renderScorecard() {
   // Table rows
   const body = document.getElementById("scBody");
   if (n === 0) {
-    body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:34px;color:var(--mute)">
+    body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:34px;color:var(--mute)">
       No Strong Buy signals detected in the last 30 trading days.
     </td></tr>`;
   } else {
@@ -2195,6 +2204,8 @@ function renderScorecard() {
         <td>${fmtD(s.ed)}</td>
         <td style="text-align:right">${s.ep.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
         <td style="text-align:right">${s.cp.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
+        <td style="text-align:right;color:var(--blue);font-weight:600">${s.hp.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
+        <td style="text-align:right"><span class="sc-badge sc-badge-win">+${s.pr.toFixed(2)}%</span></td>
         <td style="text-align:right">${badge}</td>
         <td style="text-align:center">${s.dh}</td>
         <td style="text-align:center"><span style="background:rgba(59,130,246,.12);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600">${s.ss.toFixed(1)}</span></td>
