@@ -476,6 +476,137 @@ def save_snapshot(df: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SIGNAL SCORECARD — track how Strong Buy signals performed
+# ---------------------------------------------------------------------------
+SCORECARD_LOOKBACK = 30  # trading days
+
+def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
+    """
+    Scan the last 30 trading-day snapshots for tickers that *transitioned*
+    into Strong Buy.  For each signal, look up the next trading day's open
+    from the OHLCV data we already downloaded, and compute the return vs
+    the current close.
+
+    Returns a list of dicts ready for JSON serialization into the HTML.
+    """
+    # Load all snapshots, sorted by date
+    snap_files = sorted(SNAPSHOT_DIR.glob("*.json"))
+    if len(snap_files) < 2:
+        print("Scorecard: not enough snapshots for signal detection")
+        return []
+
+    # Keep only last SCORECARD_LOOKBACK + 1 files (need prev day for transition)
+    snap_files = snap_files[-(SCORECARD_LOOKBACK + 1):]
+    snapshots = []
+    for f in snap_files:
+        try:
+            snapshots.append((f.stem, json.loads(f.read_text())))
+        except Exception:
+            continue
+
+    if len(snapshots) < 2:
+        return []
+
+    # Build current close lookup from today's scan
+    today_close = {}
+    df_ok = df[df["status"] == "ok"]
+    for _, r in df_ok.iterrows():
+        today_close[r["ticker"]] = float(r["close"])
+
+    # Build name lookup
+    name_of = {}
+    for _, r in df_ok.iterrows():
+        name_of[r["ticker"]] = r["name"]
+
+    # Detect transitions: ticker was NOT Strong Buy on day N-1, IS on day N
+    signals = []
+    dates = [s[0] for s in snapshots]
+    for i in range(1, len(snapshots)):
+        prev_date, prev_snap = snapshots[i - 1]
+        curr_date, curr_snap = snapshots[i]
+        for ticker, info in curr_snap.items():
+            if info["category"] != "Strong Buy":
+                continue
+            prev_info = prev_snap.get(ticker, {})
+            if prev_info.get("category") == "Strong Buy":
+                continue  # not a transition — was already Strong Buy
+            signals.append({
+                "ticker":      ticker,
+                "signal_date": curr_date,
+                "signal_score": info["score"],
+            })
+
+    if not signals:
+        print("Scorecard: no Strong Buy transitions in lookback window")
+        return []
+
+    print(f"Scorecard: {len(signals)} Strong Buy transitions detected in "
+          f"{len(snapshots)-1} trading days")
+
+    # For each signal, find the entry price (next trading day's open)
+    scorecard = []
+    for sig in signals:
+        ticker = sig["ticker"]
+        sig_date = sig["signal_date"]
+
+        # Skip if we don't have OHLC data for this ticker
+        if ticker not in data:
+            continue
+
+        ohlc = data[ticker]
+        # Normalize index to date strings for lookup
+        ohlc_dates = [d.strftime("%Y-%m-%d") for d in ohlc.index]
+
+        # Find the signal date index in OHLC
+        try:
+            sig_idx = ohlc_dates.index(sig_date)
+        except ValueError:
+            # Signal date not in OHLC (e.g. data gap) — skip
+            continue
+
+        # Entry = next trading day's open
+        entry_idx = sig_idx + 1
+        if entry_idx >= len(ohlc):
+            continue  # signal is too recent, no next-day data yet
+
+        entry_date = ohlc_dates[entry_idx]
+        entry_open = float(ohlc.iloc[entry_idx]["Open"])
+        if pd.isna(entry_open) or entry_open <= 0:
+            continue
+
+        # Current close from today's scan (preferred) or latest OHLC bar
+        curr_close = today_close.get(ticker)
+        if curr_close is None:
+            curr_close = float(ohlc.iloc[-1]["Close"])
+        if pd.isna(curr_close) or curr_close <= 0:
+            continue
+
+        ret_pct = round((curr_close - entry_open) / entry_open * 100, 2)
+        days_held = len(ohlc) - 1 - sig_idx  # trading days since signal
+
+        scorecard.append({
+            "t":    ticker,
+            "n":    name_of.get(ticker, ticker),
+            "sd":   sig_date,
+            "ed":   entry_date,
+            "ep":   round(entry_open, 2),
+            "cp":   round(curr_close, 2),
+            "ret":  ret_pct,
+            "dh":   days_held,
+            "ss":   sig["signal_score"],
+        })
+
+    # Sort by signal date descending (most recent first)
+    scorecard.sort(key=lambda x: x["sd"], reverse=True)
+    n = len(scorecard)
+    winners = sum(1 for s in scorecard if s["ret"] > 0)
+    avg_ret = round(sum(s["ret"] for s in scorecard) / n, 2) if n else 0
+    print(f"Scorecard: {n} tradeable signals, hit rate {winners}/{n} "
+          f"({round(winners/n*100,1) if n else 0}%), avg return {avg_ret}%")
+    return scorecard
+
+
+# ---------------------------------------------------------------------------
 # MARKET BREADTH
 # ---------------------------------------------------------------------------
 def compute_breadth(df: pd.DataFrame, data: dict) -> dict:
@@ -775,7 +906,8 @@ def write_excel(df: pd.DataFrame, path: Path, watchlist: list[str]) -> None:
 # HTML OUTPUT — with tooltips, add/remove, localStorage watchlist
 # ---------------------------------------------------------------------------
 def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
-               breadth: dict | None = None) -> None:
+               breadth: dict | None = None,
+               scorecard: list | None = None) -> None:
     df_ok = df[df["status"] == "ok"].copy()
 
     def _sig_r(row, prefix=""):
@@ -1306,6 +1438,26 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   .settings-actions button:hover { border-color:var(--blue) }
   .settings-actions .status { font-size:11px; color:var(--mute) }
   .settings-actions .status b { color:#4ade80 }
+
+  /* ---------- Signal Scorecard ---------- */
+  .sc-summary {
+    display:flex; gap:24px; padding:14px 18px; margin-bottom:8px;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    flex-wrap:wrap;
+  }
+  .sc-stat { text-align:center; min-width:100px }
+  .sc-stat .sc-val { font-size:22px; font-weight:700 }
+  .sc-stat .sc-lbl { font-size:11px; color:var(--mute); margin-top:2px }
+  .sc-tbl th { position:sticky; top:0; background:var(--panel); padding:8px 10px;
+    font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:var(--mute);
+    border-bottom:2px solid var(--line); }
+  .sc-tbl td { padding:7px 10px; border-bottom:1px solid var(--line); font-size:13px }
+  .sc-tbl tr:hover td { background:rgba(59,130,246,.06) }
+  .sc-ret-pos { color:var(--green); font-weight:600 }
+  .sc-ret-neg { color:var(--red); font-weight:600 }
+  .sc-badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600 }
+  .sc-badge-win { background:rgba(34,197,94,.15); color:var(--green) }
+  .sc-badge-loss { background:rgba(239,68,68,.15); color:var(--red) }
 </style></head>
 <body>
 <div class="topbar">
@@ -1352,6 +1504,9 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
   </button>
   <button class="tab" id="tabSB" onclick="setTab('sb')">
     Strong Buy Scan <span class="count" id="tabSBCount"></span>
+  </button>
+  <button class="tab" id="tabSC" onclick="setTab('sc')">
+    Signal Scorecard <span class="count" id="tabSCCount"></span>
   </button>
   <span class="spacer"></span>
   <div class="tf-toggle">
@@ -1401,6 +1556,29 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
         <tbody id="tb"></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<!-- Signal Scorecard (hidden by default, shown when tab=sc) -->
+<div class="wrap" id="scorecardWrap" style="display:none">
+  <div class="sc-summary" id="scSummary"></div>
+  <div class="tbl-host">
+    <table class="ftbl sc-tbl" id="scTable">
+      <thead>
+        <tr>
+          <th style="width:100px">Ticker</th>
+          <th style="width:180px">Name</th>
+          <th style="width:90px" data-tip="Date the Strong Buy signal fired">Signal Date</th>
+          <th style="width:90px" data-tip="Next trading day — assumed entry at open">Entry Date</th>
+          <th style="width:80px;text-align:right">Entry &#8377;</th>
+          <th style="width:80px;text-align:right">Now &#8377;</th>
+          <th style="width:75px;text-align:right" data-tip="Return if you bought at next-day open and held till now">Return %</th>
+          <th style="width:60px;text-align:center" data-tip="Trading days since entry">Days</th>
+          <th style="width:60px;text-align:center" data-tip="Composite score when signal fired">Score</th>
+        </tr>
+      </thead>
+      <tbody id="scBody"></tbody>
+    </table>
   </div>
 </div>
 
@@ -1481,6 +1659,7 @@ const DATA      = __DATA__;
 const DEFAULT_WL= __WATCHLIST__;
 const BREADTH   = __BREADTH__;
 const SECTORS   = __SECTORS__;
+const SCORECARD = __SCORECARD__;
 const STAMP         = "__STAMP__";
 const LS_KEY        = "am_watch_v2";
 const LS_W_KEY      = "am_watch_v2_weights";
@@ -1897,6 +2076,7 @@ function render() {
 
   document.getElementById("tabWLCount").textContent = wlData.length;
   document.getElementById("tabSBCount").textContent = sbData.length;
+  document.getElementById("tabSCCount").textContent = (SCORECARD || []).length;
   document.getElementById("countTag").textContent =
     `Showing ${rows.length} ${TAB === "wl" ? "of " + wlData.length + " in watchlist" : "scan hits"} · ${DATA.length} stocks scanned · ${TF === "w" ? "weekly" : "daily"}`;
 }
@@ -1959,12 +2139,82 @@ function renderBreadth() {
   `;
 }
 
+// -------- Signal Scorecard rendering --------
+function renderScorecard() {
+  const sc = SCORECARD || [];
+  const n = sc.length;
+  const wins = sc.filter(s => s.ret > 0).length;
+  const hitRate = n ? (wins / n * 100).toFixed(1) : 0;
+  const avgRet = n ? (sc.reduce((a, s) => a + s.ret, 0) / n).toFixed(2) : 0;
+  const bestRet = n ? Math.max(...sc.map(s => s.ret)).toFixed(2) : 0;
+  const worstRet = n ? Math.min(...sc.map(s => s.ret)).toFixed(2) : 0;
+
+  // Summary stats
+  const sumEl = document.getElementById("scSummary");
+  sumEl.innerHTML = `
+    <div class="sc-stat">
+      <div class="sc-val">${n}</div>
+      <div class="sc-lbl">Signals (30d)</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val ${Number(hitRate) >= 50 ? 'sc-ret-pos' : 'sc-ret-neg'}">${hitRate}%</div>
+      <div class="sc-lbl">Hit Rate (${wins}/${n})</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val ${Number(avgRet) >= 0 ? 'sc-ret-pos' : 'sc-ret-neg'}">${avgRet}%</div>
+      <div class="sc-lbl">Avg Return</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val sc-ret-pos">${bestRet}%</div>
+      <div class="sc-lbl">Best</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val sc-ret-neg">${worstRet}%</div>
+      <div class="sc-lbl">Worst</div>
+    </div>
+  `;
+
+  // Table rows
+  const body = document.getElementById("scBody");
+  if (n === 0) {
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:34px;color:var(--mute)">
+      No Strong Buy signals detected in the last 30 trading days.
+    </td></tr>`;
+  } else {
+    body.innerHTML = sc.map(s => {
+      const retCls = s.ret >= 0 ? 'sc-ret-pos' : 'sc-ret-neg';
+      const badge = s.ret >= 0
+        ? `<span class="sc-badge sc-badge-win">+${s.ret.toFixed(2)}%</span>`
+        : `<span class="sc-badge sc-badge-loss">${s.ret.toFixed(2)}%</span>`;
+      // Format dates as DD Mon
+      const fmtD = d => { const p = d.split("-"); const m = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+p[1]]; return `${+p[2]} ${m}`; };
+      return `<tr>
+        <td><a href="#" onclick="event.preventDefault();setTab('wl');addTickerDirect('${s.t}')" style="color:var(--blue);text-decoration:none;font-weight:600">${s.t}</a></td>
+        <td style="color:var(--mute);font-size:12px">${s.n}</td>
+        <td>${fmtD(s.sd)}</td>
+        <td>${fmtD(s.ed)}</td>
+        <td style="text-align:right">${s.ep.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
+        <td style="text-align:right">${s.cp.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
+        <td style="text-align:right">${badge}</td>
+        <td style="text-align:center">${s.dh}</td>
+        <td style="text-align:center"><span style="background:rgba(59,130,246,.12);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600">${s.ss.toFixed(1)}</span></td>
+      </tr>`;
+    }).join("");
+  }
+
+  // Tab count
+  document.getElementById("tabSCCount").textContent = n;
+  document.getElementById("countTag").textContent = `${n} signals tracked over last 30 trading days`;
+}
+
 // -------- Tab / timeframe toggle --------
 function setTab(t) {
   TAB = t;
   localStorage.setItem(LS_TAB, TAB);
   document.getElementById("tabWL").classList.toggle("active", t === "wl");
   document.getElementById("tabSB").classList.toggle("active", t === "sb");
+  document.getElementById("tabSC").classList.toggle("active", t === "sc");
+  const isGrid = (t === "wl" || t === "sb");
   // Toggle control visibility (wl-only vs sb-only controls)
   document.getElementById("wlOnly").style.display = t === "wl" ? "" : "none";
   document.getElementById("addDD").style.display = t === "wl" ? "" : "none";
@@ -1972,8 +2222,16 @@ function setTab(t) {
   document.querySelectorAll(".controls button")[1].style.display = t === "wl" ? "" : "none"; // Reset WL
   document.getElementById("sbOnly").style.display = t === "sb" ? "" : "none";
   document.getElementById("sbScoreWrap").style.display = t === "sb" ? "inline-flex" : "none";
-  renderHeader();
-  render();
+  // Show/hide main grid vs scorecard
+  document.querySelector(".controls").style.display = isGrid ? "" : "none";
+  document.querySelector(".wrap:not(#scorecardWrap)").style.display = isGrid ? "" : "none";
+  document.getElementById("scorecardWrap").style.display = t === "sc" ? "" : "none";
+  if (isGrid) {
+    renderHeader();
+    render();
+  } else {
+    renderScorecard();
+  }
 }
 function setTf(m) {
   TF = m;
@@ -2253,13 +2511,16 @@ syncPullOnLoad();
 </script>
 </body></html>"""
 
+    scorecard_json = json.dumps(scorecard or [], separators=(",", ":"), default=str)
+
     html = (html
         .replace("__STAMP_HUMAN__", STAMP_HUMAN)
         .replace("__STAMP__", STAMP)
         .replace("__DATA__", payload_json)
         .replace("__WATCHLIST__", watchlist_json)
         .replace("__BREADTH__", breadth_json)
-        .replace("__SECTORS__", sectors_json))
+        .replace("__SECTORS__", sectors_json)
+        .replace("__SCORECARD__", scorecard_json))
     path.write_text(html, encoding="utf-8")
 
 
@@ -2281,11 +2542,15 @@ def main():
     # Save today's snapshot for tomorrow's delta
     save_snapshot(df)
 
+    # Build signal scorecard from historical snapshots
+    scorecard = build_scorecard(data, df)
+    print(f"Signal Scorecard: {len(scorecard)} signals in last {SCORECARD_LOOKBACK} days")
+
     xlsx_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.xlsx"
     html_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.html"
     index_path = OUT_DIR / "index.html"                # GH Pages entry point
     write_excel(df, xlsx_path, DEFAULT_WATCHLIST)
-    write_html(df,  html_path, DEFAULT_WATCHLIST, breadth)
+    write_html(df,  html_path, DEFAULT_WATCHLIST, breadth, scorecard=scorecard)
     # Mirror dated file to index.html so GH Pages serves it at root URL
     index_path.write_bytes(html_path.read_bytes())
 
