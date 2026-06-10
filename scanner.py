@@ -589,6 +589,11 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
         peak_high = float(highs_since.max()) if len(highs_since) > 0 and not highs_since.isna().all() else entry_open
         peak_ret = round((peak_high - entry_open) / entry_open * 100, 2)
 
+        # Max drawdown: lowest low from entry onward vs entry price
+        lows_since = ohlc.iloc[entry_idx:]["Low"]
+        trough_low = float(lows_since.min()) if len(lows_since) > 0 and not lows_since.isna().all() else entry_open
+        max_dd = round((trough_low - entry_open) / entry_open * 100, 2)
+
         scorecard.append({
             "t":    ticker,
             "n":    name_of.get(ticker, ticker),
@@ -598,6 +603,8 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
             "cp":   round(curr_close, 2),
             "hp":   round(peak_high, 2),
             "pr":   peak_ret,
+            "lp":   round(trough_low, 2),
+            "dd":   max_dd,
             "ret":  ret_pct,
             "dh":   days_held,
             "ss":   sig["signal_score"],
@@ -1588,15 +1595,16 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
         <tr>
           <th style="width:100px">Ticker</th>
           <th style="width:180px">Name</th>
+          <th style="width:60px;text-align:center" data-tip="Composite score when signal fired">Score</th>
           <th style="width:90px" data-tip="Date the Strong Buy signal fired">Signal Date</th>
           <th style="width:90px" data-tip="Next trading day — assumed entry at open">Entry Date</th>
           <th style="width:80px;text-align:right">Entry &#8377;</th>
           <th style="width:80px;text-align:right">Now &#8377;</th>
           <th style="width:80px;text-align:right" data-tip="Highest price reached since entry">High &#8377;</th>
           <th style="width:70px;text-align:right" data-tip="Peak return from entry to highest price">Peak %</th>
+          <th style="width:70px;text-align:right" data-tip="Max drawdown from entry to lowest low">Max DD</th>
           <th style="width:75px;text-align:right" data-tip="Return if you bought at next-day open and held till now">Return %</th>
           <th style="width:60px;text-align:center" data-tip="Trading days since entry">Days</th>
-          <th style="width:60px;text-align:center" data-tip="Composite score when signal fired">Score</th>
         </tr>
       </thead>
       <tbody id="scBody"></tbody>
@@ -2173,6 +2181,7 @@ function renderScorecard() {
   const bestRet = n ? Math.max(...sc.map(s => s.ret)).toFixed(2) : 0;
   const worstRet = n ? Math.min(...sc.map(s => s.ret)).toFixed(2) : 0;
   const avgPeak = n ? (sc.reduce((a, s) => a + s.pr, 0) / n).toFixed(2) : 0;
+  const avgDD = n ? (sc.reduce((a, s) => a + s.dd, 0) / n).toFixed(2) : 0;
 
   // Filter count label
   const fcEl = document.getElementById("scFilteredCount");
@@ -2202,6 +2211,10 @@ function renderScorecard() {
       <div class="sc-lbl">Avg Peak</div>
     </div>
     <div class="sc-stat">
+      <div class="sc-val sc-ret-neg">${avgDD}%</div>
+      <div class="sc-lbl">Avg Max DD</div>
+    </div>
+    <div class="sc-stat">
       <div class="sc-val sc-ret-pos">${bestRet}%</div>
       <div class="sc-lbl">Best</div>
     </div>
@@ -2228,15 +2241,16 @@ function renderScorecard() {
       return `<tr>
         <td><a href="#" onclick="event.preventDefault();setTab('wl');addTickerDirect('${s.t}')" style="color:var(--blue);text-decoration:none;font-weight:600">${s.t}</a></td>
         <td style="color:var(--mute);font-size:12px">${s.n}</td>
+        <td style="text-align:center"><span style="background:rgba(59,130,246,.12);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600">${s.ss.toFixed(1)}</span></td>
         <td>${fmtD(s.sd)}</td>
         <td>${fmtD(s.ed)}</td>
         <td style="text-align:right">${s.ep.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
         <td style="text-align:right">${s.cp.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
         <td style="text-align:right;color:var(--blue);font-weight:600">${s.hp.toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
         <td style="text-align:right"><span class="sc-badge sc-badge-win">+${s.pr.toFixed(2)}%</span></td>
+        <td style="text-align:right"><span class="sc-badge sc-badge-loss">${s.dd.toFixed(2)}%</span></td>
         <td style="text-align:right">${badge}</td>
         <td style="text-align:center">${s.dh}</td>
-        <td style="text-align:center"><span style="background:rgba(59,130,246,.12);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600">${s.ss.toFixed(1)}</span></td>
       </tr>`;
     }).join("");
   }
