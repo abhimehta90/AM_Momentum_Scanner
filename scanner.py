@@ -478,7 +478,7 @@ def save_snapshot(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # SIGNAL SCORECARD — track how Strong Buy signals performed
 # ---------------------------------------------------------------------------
-SCORECARD_LOOKBACK = 30  # trading days
+SCORECARD_LOOKBACK = 60  # trading days
 
 def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
     """
@@ -1452,6 +1452,11 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
     background:var(--panel); border:1px solid var(--line); border-radius:8px;
     flex-wrap:wrap;
   }
+  .sc-filter {
+    display:flex; align-items:center; gap:10px; padding:8px 18px;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    margin-bottom:8px;
+  }
   .sc-stat { text-align:center; min-width:100px }
   .sc-stat .sc-val { font-size:22px; font-weight:700 }
   .sc-stat .sc-lbl { font-size:11px; color:var(--mute); margin-top:2px }
@@ -1569,7 +1574,15 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 <!-- Signal Scorecard (hidden by default, shown when tab=sc) -->
 <div class="wrap" id="scorecardWrap" style="display:none">
   <div class="sc-summary" id="scSummary"></div>
-  <div class="tbl-host" style="overflow-y:auto;max-height:calc(100vh - 220px)">
+  <div class="sc-filter" id="scFilter">
+    <label style="font-size:12px;color:var(--mute);font-weight:600">Min Score:</label>
+    <input type="range" id="scMinScore" min="50" max="100" value="50" step="5"
+           oninput="document.getElementById('scMinScoreVal').textContent=this.value;renderScorecard()"
+           style="width:160px;accent-color:var(--blue);vertical-align:middle">
+    <span id="scMinScoreVal" style="font-size:13px;font-weight:700;min-width:28px;display:inline-block">50</span>
+    <span style="font-size:11px;color:var(--mute);margin-left:8px" id="scFilteredCount"></span>
+  </div>
+  <div class="tbl-host" style="overflow-y:auto;max-height:calc(100vh - 270px)">
     <table class="ftbl sc-tbl" id="scTable">
       <thead>
         <tr>
@@ -2150,20 +2163,31 @@ function renderBreadth() {
 
 // -------- Signal Scorecard rendering --------
 function renderScorecard() {
-  const sc = SCORECARD || [];
+  const all = SCORECARD || [];
+  const minScore = Number(document.getElementById("scMinScore").value) || 50;
+  const sc = all.filter(s => s.ss >= minScore);
   const n = sc.length;
   const wins = sc.filter(s => s.ret > 0).length;
   const hitRate = n ? (wins / n * 100).toFixed(1) : 0;
   const avgRet = n ? (sc.reduce((a, s) => a + s.ret, 0) / n).toFixed(2) : 0;
   const bestRet = n ? Math.max(...sc.map(s => s.ret)).toFixed(2) : 0;
   const worstRet = n ? Math.min(...sc.map(s => s.ret)).toFixed(2) : 0;
+  const avgPeak = n ? (sc.reduce((a, s) => a + s.pr, 0) / n).toFixed(2) : 0;
+
+  // Filter count label
+  const fcEl = document.getElementById("scFilteredCount");
+  if (minScore > 50) {
+    fcEl.textContent = `Showing ${n} of ${all.length} signals (score \u2265 ${minScore})`;
+  } else {
+    fcEl.textContent = `All ${all.length} signals`;
+  }
 
   // Summary stats
   const sumEl = document.getElementById("scSummary");
   sumEl.innerHTML = `
     <div class="sc-stat">
       <div class="sc-val">${n}</div>
-      <div class="sc-lbl">Signals (30d)</div>
+      <div class="sc-lbl">Signals (60d)</div>
     </div>
     <div class="sc-stat">
       <div class="sc-val ${Number(hitRate) >= 50 ? 'sc-ret-pos' : 'sc-ret-neg'}">${hitRate}%</div>
@@ -2172,6 +2196,10 @@ function renderScorecard() {
     <div class="sc-stat">
       <div class="sc-val ${Number(avgRet) >= 0 ? 'sc-ret-pos' : 'sc-ret-neg'}">${avgRet}%</div>
       <div class="sc-lbl">Avg Return</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val sc-ret-pos">+${avgPeak}%</div>
+      <div class="sc-lbl">Avg Peak</div>
     </div>
     <div class="sc-stat">
       <div class="sc-val sc-ret-pos">${bestRet}%</div>
@@ -2187,7 +2215,7 @@ function renderScorecard() {
   const body = document.getElementById("scBody");
   if (n === 0) {
     body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:34px;color:var(--mute)">
-      No Strong Buy signals detected in the last 30 trading days.
+      No signals with score \u2265 ${minScore} in the last 60 trading days.
     </td></tr>`;
   } else {
     body.innerHTML = sc.map(s => {
@@ -2213,7 +2241,7 @@ function renderScorecard() {
     }).join("");
   }
 
-  // Tab count
+  // Tab count shows filtered count
   document.getElementById("tabSCCount").textContent = n;
   document.getElementById("countTag").textContent = `${n} signals tracked over last 30 trading days`;
 }
