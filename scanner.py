@@ -469,6 +469,8 @@ def save_snapshot(df: pd.DataFrame) -> None:
             "score":    float(r["score"]),
             "category": r["category"],
             "close":    float(r["close"]),
+            "w_score":    float(r.get("w_score") or 0),
+            "w_category": r.get("w_category") or "",
         }
     out = SNAPSHOT_DIR / f"{STAMP}.json"
     out.write_text(json.dumps(snap, separators=(",", ":")))
@@ -480,12 +482,15 @@ def save_snapshot(df: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 SCORECARD_LOOKBACK = 60  # trading days
 
-def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
+def build_scorecard(data: dict, df: pd.DataFrame, weekly: bool = False) -> list[dict]:
     """
-    Scan the last 30 trading-day snapshots for tickers that *transitioned*
-    into Strong Buy.  For each signal, look up the next trading day's open
-    from the OHLCV data we already downloaded, and compute the return vs
-    the current close.
+    Scan the last SCORECARD_LOOKBACK trading-day snapshots for tickers that
+    *transitioned* into Strong Buy.  For each signal, look up the next
+    trading day's open from the OHLCV data we already downloaded, and
+    compute the return vs the current close.
+
+    When weekly=True, uses the weekly category/score fields from snapshots
+    instead of the daily ones.
 
     Returns a list of dicts ready for JSON serialization into the HTML.
     """
@@ -518,6 +523,11 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
     for _, r in df_ok.iterrows():
         name_of[r["ticker"]] = r["name"]
 
+    # Pick category / score keys based on daily vs weekly mode
+    cat_key   = "w_category" if weekly else "category"
+    score_key = "w_score"    if weekly else "score"
+    mode_label = "weekly" if weekly else "daily"
+
     # Detect transitions: ticker was NOT Strong Buy on day N-1, IS on day N
     signals = []
     dates = [s[0] for s in snapshots]
@@ -525,22 +535,22 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
         prev_date, prev_snap = snapshots[i - 1]
         curr_date, curr_snap = snapshots[i]
         for ticker, info in curr_snap.items():
-            if info["category"] != "Strong Buy":
+            if info.get(cat_key) != "Strong Buy":
                 continue
             prev_info = prev_snap.get(ticker, {})
-            if prev_info.get("category") == "Strong Buy":
+            if prev_info.get(cat_key) == "Strong Buy":
                 continue  # not a transition — was already Strong Buy
             signals.append({
                 "ticker":      ticker,
                 "signal_date": curr_date,
-                "signal_score": info["score"],
+                "signal_score": info.get(score_key, info.get("score", 0)),
             })
 
     if not signals:
-        print("Scorecard: no Strong Buy transitions in lookback window")
+        print(f"Scorecard ({mode_label}): no Strong Buy transitions in lookback window")
         return []
 
-    print(f"Scorecard: {len(signals)} Strong Buy transitions detected in "
+    print(f"Scorecard ({mode_label}): {len(signals)} Strong Buy transitions detected in "
           f"{len(snapshots)-1} trading days")
 
     # For each signal, find the entry price (next trading day's open)
@@ -928,7 +938,8 @@ def write_excel(df: pd.DataFrame, path: Path, watchlist: list[str]) -> None:
 # ---------------------------------------------------------------------------
 def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
                breadth: dict | None = None,
-               scorecard: list | None = None) -> None:
+               scorecard: list | None = None,
+               scorecard_w: list | None = None) -> None:
     df_ok = df[df["status"] == "ok"].copy()
 
     def _sig_r(row, prefix=""):
@@ -1462,16 +1473,16 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
 
   /* ---------- Signal Scorecard ---------- */
   .sc-summary {
-    display:flex; gap:24px; padding:14px 18px; margin-bottom:8px;
+    display:flex; gap:16px 22px; padding:14px 18px; margin-bottom:8px;
     background:var(--panel); border:1px solid var(--line); border-radius:8px;
-    flex-wrap:wrap;
+    flex-wrap:wrap; justify-content:center;
   }
   .sc-filter {
     display:flex; align-items:center; gap:10px; padding:8px 18px;
     background:var(--panel); border:1px solid var(--line); border-radius:8px;
     margin-bottom:8px;
   }
-  .sc-stat { text-align:center; min-width:100px }
+  .sc-stat { text-align:center; min-width:85px }
   .sc-stat .sc-val { font-size:22px; font-weight:700 }
   .sc-stat .sc-lbl { font-size:11px; color:var(--mute); margin-top:2px }
   .sc-tbl th { position:sticky; top:0; background:var(--panel); padding:8px 10px;
@@ -1696,7 +1707,8 @@ const DATA      = __DATA__;
 const DEFAULT_WL= __WATCHLIST__;
 const BREADTH   = __BREADTH__;
 const SECTORS   = __SECTORS__;
-const SCORECARD = __SCORECARD__;
+const SCORECARD   = __SCORECARD__;
+const SCORECARD_W = __SCORECARD_W__;
 const STAMP         = "__STAMP__";
 const LS_KEY        = "am_watch_v2";
 const LS_W_KEY      = "am_watch_v2_weights";
@@ -2178,14 +2190,11 @@ function renderBreadth() {
 
 // -------- Signal Scorecard rendering --------
 function renderScorecard() {
-  const all = SCORECARD || [];
+  const all = (TF === "w" ? SCORECARD_W : SCORECARD) || [];
   const minScore = Number(document.getElementById("scMinScore").value) || 50;
-  let sc = all.filter(s => s.ss >= minScore);
-  if (TF === "w") {
-    const weeklyStrong = new Set(DATA.filter(d => d.w && d.w.cat === "Strong Buy").map(d => d.t));
-    sc = sc.filter(s => weeklyStrong.has(s.t));
-  }
-    const n = sc.length; 
+  const sc = all.filter(s => s.ss >= minScore);
+  const n = sc.length;
+  const tfLabel = TF === "w" ? "Weekly" : "Daily";
 
   // Hit rate based on PEAK (did signal ever deliver positive upside?)
   const peakWins = sc.filter(s => s.pr > 0).length;
@@ -2218,12 +2227,12 @@ function renderScorecard() {
     fcEl.textContent = `All ${all.length} signals`;
   }
 
-  // Summary stats
+  // Summary stats — two rows for clarity
   const sumEl = document.getElementById("scSummary");
   sumEl.innerHTML = `
     <div class="sc-stat">
       <div class="sc-val">${n}</div>
-      <div class="sc-lbl">Signals (60d)</div>
+      <div class="sc-lbl">${tfLabel} Signals (60d)</div>
     </div>
     <div class="sc-stat">
       <div class="sc-val ${Number(hitRate) >= 50 ? 'sc-ret-pos' : 'sc-ret-neg'}">${hitRate}%</div>
@@ -2335,8 +2344,7 @@ function addTickerDirect(t) {
     saveWL(watchlist);
     buildDropdown();
     renderBreadth();
-    if (TAB === "sc") { renderScorecard(); } else { render(); }
-;
+    render();
   }
 }
 
@@ -2600,7 +2608,8 @@ syncPullOnLoad();
 </script>
 </body></html>"""
 
-    scorecard_json = json.dumps(scorecard or [], separators=(",", ":"), default=str)
+    scorecard_json   = json.dumps(scorecard or [], separators=(",", ":"), default=str)
+    scorecard_w_json = json.dumps(scorecard_w or [], separators=(",", ":"), default=str)
 
     html = (html
         .replace("__STAMP_HUMAN__", STAMP_HUMAN)
@@ -2609,6 +2618,7 @@ syncPullOnLoad();
         .replace("__WATCHLIST__", watchlist_json)
         .replace("__BREADTH__", breadth_json)
         .replace("__SECTORS__", sectors_json)
+        .replace("__SCORECARD_W__", scorecard_w_json)
         .replace("__SCORECARD__", scorecard_json))
     path.write_text(html, encoding="utf-8")
 
@@ -2632,14 +2642,16 @@ def main():
     save_snapshot(df)
 
     # Build signal scorecard from historical snapshots
-    scorecard = build_scorecard(data, df)
-    print(f"Signal Scorecard: {len(scorecard)} signals in last {SCORECARD_LOOKBACK} days")
+    scorecard   = build_scorecard(data, df, weekly=False)
+    scorecard_w = build_scorecard(data, df, weekly=True)
+    print(f"Signal Scorecard: {len(scorecard)} daily / {len(scorecard_w)} weekly signals in last {SCORECARD_LOOKBACK} days")
 
     xlsx_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.xlsx"
     html_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.html"
     index_path = OUT_DIR / "index.html"                # GH Pages entry point
     write_excel(df, xlsx_path, DEFAULT_WATCHLIST)
-    write_html(df,  html_path, DEFAULT_WATCHLIST, breadth, scorecard=scorecard)
+    write_html(df,  html_path, DEFAULT_WATCHLIST, breadth,
+               scorecard=scorecard, scorecard_w=scorecard_w)
     # Mirror dated file to index.html so GH Pages serves it at root URL
     index_path.write_bytes(html_path.read_bytes())
 
