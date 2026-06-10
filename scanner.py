@@ -588,6 +588,12 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
         highs_since = ohlc.iloc[entry_idx:]["High"]
         peak_high = float(highs_since.max()) if len(highs_since) > 0 and not highs_since.isna().all() else entry_open
         peak_ret = round((peak_high - entry_open) / entry_open * 100, 2)
+        # Days from entry to peak high
+        if len(highs_since) > 0 and not highs_since.isna().all():
+            peak_idx = int(highs_since.values.argmax())
+        else:
+            peak_idx = 0
+        days_to_peak = peak_idx  # trading days from entry to peak
 
         # Max drawdown: lowest low from entry onward vs entry price
         lows_since = ohlc.iloc[entry_idx:]["Low"]
@@ -603,6 +609,7 @@ def build_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
             "cp":   round(curr_close, 2),
             "hp":   round(peak_high, 2),
             "pr":   peak_ret,
+            "dp":   days_to_peak,
             "lp":   round(trough_low, 2),
             "dd":   max_dd,
             "ret":  ret_pct,
@@ -2175,13 +2182,29 @@ function renderScorecard() {
   const minScore = Number(document.getElementById("scMinScore").value) || 50;
   const sc = all.filter(s => s.ss >= minScore);
   const n = sc.length;
-  const wins = sc.filter(s => s.ret > 0).length;
-  const hitRate = n ? (wins / n * 100).toFixed(1) : 0;
+
+  // Hit rate based on PEAK (did signal ever deliver positive upside?)
+  const peakWins = sc.filter(s => s.pr > 0).length;
+  const hitRate = n ? (peakWins / n * 100).toFixed(1) : 0;
+
+  // Core stats
   const avgRet = n ? (sc.reduce((a, s) => a + s.ret, 0) / n).toFixed(2) : 0;
-  const bestRet = n ? Math.max(...sc.map(s => s.ret)).toFixed(2) : 0;
-  const worstRet = n ? Math.min(...sc.map(s => s.ret)).toFixed(2) : 0;
   const avgPeak = n ? (sc.reduce((a, s) => a + s.pr, 0) / n).toFixed(2) : 0;
   const avgDD = n ? (sc.reduce((a, s) => a + s.dd, 0) / n).toFixed(2) : 0;
+
+  // Avg days to peak — how long to hold for optimal exit
+  const avgDTP = n ? (sc.reduce((a, s) => a + (s.dp || 0), 0) / n).toFixed(0) : 0;
+
+  // Reward-to-risk: avg peak / avg |drawdown|
+  const absDD = n ? Math.abs(sc.reduce((a, s) => a + s.dd, 0) / n) : 1;
+  const rrRatio = absDD > 0 ? (Math.abs(Number(avgPeak)) / absDD).toFixed(1) : '-';
+
+  // Giveback: how much of peak upside is lost by holding to now
+  const avgGiveback = n ? (sc.reduce((a, s) => a + (s.pr - s.ret), 0) / n).toFixed(2) : 0;
+
+  // Peaked above 5% (meaningful swing move)
+  const peaked5 = sc.filter(s => s.pr >= 5).length;
+  const peaked5Pct = n ? (peaked5 / n * 100).toFixed(0) : 0;
 
   // Filter count label
   const fcEl = document.getElementById("scFilteredCount");
@@ -2200,11 +2223,11 @@ function renderScorecard() {
     </div>
     <div class="sc-stat">
       <div class="sc-val ${Number(hitRate) >= 50 ? 'sc-ret-pos' : 'sc-ret-neg'}">${hitRate}%</div>
-      <div class="sc-lbl">Hit Rate (${wins}/${n})</div>
+      <div class="sc-lbl">Hit Rate \u2014 Peak (${peakWins}/${n})</div>
     </div>
     <div class="sc-stat">
       <div class="sc-val ${Number(avgRet) >= 0 ? 'sc-ret-pos' : 'sc-ret-neg'}">${avgRet}%</div>
-      <div class="sc-lbl">Avg Return</div>
+      <div class="sc-lbl">Avg Hold Return</div>
     </div>
     <div class="sc-stat">
       <div class="sc-val sc-ret-pos">+${avgPeak}%</div>
@@ -2215,12 +2238,20 @@ function renderScorecard() {
       <div class="sc-lbl">Avg Max DD</div>
     </div>
     <div class="sc-stat">
-      <div class="sc-val sc-ret-pos">${bestRet}%</div>
-      <div class="sc-lbl">Best</div>
+      <div class="sc-val" style="color:var(--blue)">${rrRatio}x</div>
+      <div class="sc-lbl">Reward : Risk</div>
     </div>
     <div class="sc-stat">
-      <div class="sc-val sc-ret-neg">${worstRet}%</div>
-      <div class="sc-lbl">Worst</div>
+      <div class="sc-val" style="color:var(--blue)">${avgDTP}d</div>
+      <div class="sc-lbl">Avg Days to Peak</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val sc-ret-neg">\u2212${avgGiveback}%</div>
+      <div class="sc-lbl">Avg Giveback</div>
+    </div>
+    <div class="sc-stat">
+      <div class="sc-val">${peaked5Pct}%</div>
+      <div class="sc-lbl">Peaked \u22655% (${peaked5}/${n})</div>
     </div>
   `;
 
