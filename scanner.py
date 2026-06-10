@@ -2185,6 +2185,7 @@ function renderScorecard() {
     const weeklyStrong = new Set(DATA.filter(d => d.w && d.w.cat === "Strong Buy").map(d => d.t));
     sc = sc.filter(s => weeklyStrong.has(s.t));
   }
+    const n = sc.length; 
 
   // Hit rate based on PEAK (did signal ever deliver positive upside?)
   const peakWins = sc.filter(s => s.pr > 0).length;
