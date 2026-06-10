@@ -2180,8 +2180,11 @@ function renderBreadth() {
 function renderScorecard() {
   const all = SCORECARD || [];
   const minScore = Number(document.getElementById("scMinScore").value) || 50;
-  const sc = all.filter(s => s.ss >= minScore);
-  const n = sc.length;
+  let sc = all.filter(s => s.ss >= minScore);
+  if (TF === "w") {
+    const weeklyStrong = new Set(DATA.filter(d => d.w && d.w.cat === "Strong Buy").map(d => d.t));
+    sc = sc.filter(s => weeklyStrong.has(s.t));
+  }
 
   // Hit rate based on PEAK (did signal ever deliver positive upside?)
   const peakWins = sc.filter(s => s.pr > 0).length;
@@ -2323,7 +2326,7 @@ function setTf(m) {
   document.getElementById("tfD").classList.toggle("on", m === "d");
   document.getElementById("tfW").classList.toggle("on", m === "w");
   renderBreadth();
-  render();
+  if (TAB === "sc") { renderScorecard(); } else { render(); }
 }
 function addTickerDirect(t) {
   if (!watchlist.includes(t)) {
@@ -2331,7 +2334,8 @@ function addTickerDirect(t) {
     saveWL(watchlist);
     buildDropdown();
     renderBreadth();
-    render();
+    if (TAB === "sc") { renderScorecard(); } else { render(); }
+;
   }
 }
 
