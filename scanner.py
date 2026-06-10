@@ -638,6 +638,134 @@ def build_scorecard(data: dict, df: pd.DataFrame, weekly: bool = False) -> list[
 
 
 # ---------------------------------------------------------------------------
+# WEEKLY SCORECARD — computed from OHLC data (no snapshot dependency)
+# ---------------------------------------------------------------------------
+def build_weekly_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
+    """
+    Build scorecard for weekly Strong Buy transitions by computing weekly
+    categories directly from the 3-year OHLC data.  Unlike the daily
+    scorecard (which reads saved snapshots), this recomputes weekly
+    indicators and scores at each weekly bar to detect transitions.
+    """
+    lookback_weeks = SCORECARD_LOOKBACK // 5 + 2   # ~14 weeks for 60 trading days
+
+    df_ok = df[df["status"] == "ok"]
+    today_close = {r["ticker"]: float(r["close"]) for _, r in df_ok.iterrows()}
+    name_of     = {r["ticker"]: r["name"]          for _, r in df_ok.iterrows()}
+
+    scorecard = []
+    processed = 0
+
+    for ticker, ohlc in data.items():
+        try:
+            cols = ["Open", "High", "Low", "Close", "Volume"]
+            if "Adj Close" in ohlc.columns:
+                cols.append("Adj Close")
+            w = resample_weekly(ohlc[cols])
+            if len(w) < 60:
+                continue
+
+            w = compute_indicators(w.copy())
+
+            # Score the last N+1 weekly bars to detect transitions
+            n_bars = min(lookback_weeks + 1, len(w))
+            cats, scores = [], []
+            for i in range(len(w) - n_bars, len(w)):
+                try:
+                    s = score_ticker(w.iloc[:i + 1])
+                    cats.append(s["category"])
+                    scores.append(s["score"])
+                except Exception:
+                    cats.append("")
+                    scores.append(0)
+
+            w_dates    = [d.strftime("%Y-%m-%d") for d in w.index[-n_bars:]]
+            ohlc_dates = [d.strftime("%Y-%m-%d") for d in ohlc.index]
+
+            # Detect transitions: not Strong Buy → Strong Buy
+            for j in range(1, len(cats)):
+                if cats[j] != "Strong Buy" or cats[j - 1] == "Strong Buy":
+                    continue
+
+                sig_date     = w_dates[j]       # weekly bar end date
+                signal_score = scores[j]
+
+                # Entry = next trading day's open after the weekly bar close
+                entry_idx = None
+                for k, d in enumerate(ohlc_dates):
+                    if d > sig_date:
+                        entry_idx = k
+                        break
+                if entry_idx is None:
+                    continue
+
+                entry_date = ohlc_dates[entry_idx]
+                entry_open = float(ohlc.iloc[entry_idx]["Open"])
+                if pd.isna(entry_open) or entry_open <= 0:
+                    continue
+
+                curr_close = today_close.get(ticker)
+                if curr_close is None:
+                    curr_close = float(ohlc.iloc[-1]["Close"])
+                if pd.isna(curr_close) or curr_close <= 0:
+                    continue
+
+                ret_pct   = round((curr_close - entry_open) / entry_open * 100, 2)
+                days_held = len(ohlc) - entry_idx
+
+                # Peak high from entry onward
+                highs_since = ohlc.iloc[entry_idx:]["High"]
+                if not highs_since.empty and not highs_since.isna().all():
+                    peak_high    = float(highs_since.max())
+                    days_to_peak = int(highs_since.values.argmax())
+                else:
+                    peak_high    = entry_open
+                    days_to_peak = 0
+                peak_ret = round((peak_high - entry_open) / entry_open * 100, 2)
+
+                # Max drawdown
+                lows_since = ohlc.iloc[entry_idx:]["Low"]
+                trough_low = float(lows_since.min()) if not lows_since.empty and not lows_since.isna().all() else entry_open
+                max_dd     = round((trough_low - entry_open) / entry_open * 100, 2)
+
+                scorecard.append({
+                    "t":   ticker,
+                    "n":   name_of.get(ticker, ticker),
+                    "sd":  sig_date,
+                    "ed":  entry_date,
+                    "ep":  round(entry_open, 2),
+                    "cp":  round(curr_close, 2),
+                    "hp":  round(peak_high, 2),
+                    "pr":  peak_ret,
+                    "dp":  days_to_peak,
+                    "lp":  round(trough_low, 2),
+                    "dd":  max_dd,
+                    "ret": ret_pct,
+                    "dh":  days_held,
+                    "ss":  signal_score,
+                })
+            processed += 1
+        except Exception:
+            continue
+
+    # Keep only signals within the lookback window
+    cutoff = (dt.datetime.now() - dt.timedelta(days=SCORECARD_LOOKBACK * 2)).strftime("%Y-%m-%d")
+    scorecard = [s for s in scorecard if s["sd"] >= cutoff]
+    scorecard.sort(key=lambda x: x["sd"], reverse=True)
+
+    n = len(scorecard)
+    if n:
+        winners = sum(1 for s in scorecard if s["ret"] > 0)
+        avg_ret = round(sum(s["ret"] for s in scorecard) / n, 2)
+        print(f"Scorecard (weekly): {n} tradeable signals from {processed} tickers, "
+              f"hit rate {winners}/{n} ({round(winners/n*100,1)}%), avg return {avg_ret}%")
+    else:
+        print(f"Scorecard (weekly): 0 signals from {processed} tickers")
+
+    return scorecard
+
+
+# ---------------------------------------------------------------------------
 # MARKET BREADTH
 # ---------------------------------------------------------------------------
 def compute_breadth(df: pd.DataFrame, data: dict) -> dict:
@@ -2642,8 +2770,8 @@ def main():
     save_snapshot(df)
 
     # Build signal scorecard from historical snapshots
-    scorecard   = build_scorecard(data, df, weekly=False)
-    scorecard_w = build_scorecard(data, df, weekly=True)
+    scorecard   = build_scorecard(data, df)
+    scorecard_w = build_weekly_scorecard(data, df)
     print(f"Signal Scorecard: {len(scorecard)} daily / {len(scorecard_w)} weekly signals in last {SCORECARD_LOOKBACK} days")
 
     xlsx_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.xlsx"
