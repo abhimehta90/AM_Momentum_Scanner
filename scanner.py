@@ -766,6 +766,69 @@ def build_weekly_scorecard(data: dict, df: pd.DataFrame) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# EARNINGS / RESULTS PROXIMITY FLAG
+# ---------------------------------------------------------------------------
+def _fetch_earnings_dates(tickers: list[str]) -> dict[str, list[str]]:
+    """
+    Fetch recent quarterly-results / earnings announcement dates for a list
+    of tickers using yfinance.  Returns {ticker: [YYYY-MM-DD, ...]} with up
+    to 12 most recent dates per ticker.
+    """
+    earnings: dict[str, list[str]] = {}
+    print(f"  Fetching earnings dates for {len(tickers)} scorecard tickers…")
+    fetched = 0
+    for t in tickers:
+        try:
+            tk = yf.Ticker(f"{t}.NS")
+            try:
+                ed = tk.get_earnings_dates(limit=12)
+            except Exception:
+                ed = None
+            if ed is not None and not ed.empty:
+                dates = []
+                for idx in ed.index:
+                    try:
+                        dates.append(idx.strftime("%Y-%m-%d"))
+                    except Exception:
+                        pass
+                if dates:
+                    earnings[t] = dates
+                    fetched += 1
+        except Exception:
+            pass
+    print(f"  Got earnings data for {fetched}/{len(tickers)} tickers")
+    return earnings
+
+
+def _flag_earnings_proximity(scorecard: list[dict],
+                             earnings: dict[str, list[str]],
+                             window_days: int = 10) -> None:
+    """
+    Mark each scorecard entry with:
+      er  = 1 if any earnings date falls within ±window_days of signal date, else 0
+      erd = nearest earnings date string (only when er=1)
+    Mutates the list in place.
+    """
+    for s in scorecard:
+        ticker   = s["t"]
+        sig_dt   = dt.datetime.strptime(s["sd"], "%Y-%m-%d").date()
+        er_dates = earnings.get(ticker, [])
+        nearest: str | None = None
+        nearest_gap = 999
+        for ed_str in er_dates:
+            try:
+                er_d = dt.datetime.strptime(ed_str, "%Y-%m-%d").date()
+                gap  = abs((er_d - sig_dt).days)
+                if gap < nearest_gap:
+                    nearest_gap = gap
+                    nearest     = ed_str
+            except Exception:
+                pass
+        s["er"]  = 1 if nearest_gap <= window_days else 0
+        s["erd"] = nearest if nearest_gap <= window_days else None
+
+
+# ---------------------------------------------------------------------------
 # MARKET BREADTH
 # ---------------------------------------------------------------------------
 def compute_breadth(df: pd.DataFrame, data: dict) -> dict:
@@ -1734,6 +1797,14 @@ def write_html(df: pd.DataFrame, path: Path, default_watchlist: list[str],
            style="width:160px;accent-color:var(--blue);vertical-align:middle">
     <span id="scMinScoreVal" style="font-size:13px;font-weight:700;min-width:28px;display:inline-block">50</span>
     <span style="font-size:11px;color:var(--mute);margin-left:8px" id="scFilteredCount"></span>
+    <span style="margin-left:16px;border-left:1px solid rgba(255,255,255,.08);padding-left:16px">
+      <label style="font-size:12px;color:var(--mute);font-weight:600;cursor:pointer;user-select:none">
+        <input type="checkbox" id="scExclEarnings" onchange="renderScorecard()"
+               style="accent-color:var(--blue);vertical-align:middle;cursor:pointer">
+        Exclude near-earnings signals
+      </label>
+      <span style="font-size:10px;color:var(--mute);margin-left:4px" data-tip="Hide signals where company results/earnings were announced within &plusmn;10 calendar days of the signal date">&plusmn;10d</span>
+    </span>
   </div>
   <div class="tbl-host" style="overflow-y:auto;max-height:calc(100vh - 270px)">
     <table class="ftbl sc-tbl" id="scTable">
@@ -2320,7 +2391,10 @@ function renderBreadth() {
 function renderScorecard() {
   const all = (TF === "w" ? SCORECARD_W : SCORECARD) || [];
   const minScore = Number(document.getElementById("scMinScore").value) || 50;
-  const sc = all.filter(s => s.ss >= minScore);
+  const exclER = document.getElementById("scExclEarnings").checked;
+  let sc = all.filter(s => s.ss >= minScore);
+  const erCount = sc.filter(s => s.er).length;
+  if (exclER) sc = sc.filter(s => !s.er);
   const n = sc.length;
   const tfLabel = TF === "w" ? "Weekly" : "Daily";
 
@@ -2349,10 +2423,13 @@ function renderScorecard() {
 
   // Filter count label
   const fcEl = document.getElementById("scFilteredCount");
-  if (minScore > 50) {
-    fcEl.textContent = `Showing ${n} of ${all.length} signals (score \u2265 ${minScore})`;
+  let filterParts = [];
+  if (minScore > 50) filterParts.push(`score \u2265 ${minScore}`);
+  if (exclER) filterParts.push(`${erCount} near-earnings excluded`);
+  if (filterParts.length) {
+    fcEl.textContent = `Showing ${n} of ${all.length} signals (${filterParts.join(', ')})`;
   } else {
-    fcEl.textContent = `All ${all.length} signals`;
+    fcEl.textContent = `All ${all.length} signals` + (erCount ? ` (${erCount} near earnings)` : '');
   }
 
   // Summary stats — two rows for clarity
@@ -2399,8 +2476,8 @@ function renderScorecard() {
   // Table rows
   const body = document.getElementById("scBody");
   if (n === 0) {
-    body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:34px;color:var(--mute)">
-      No signals with score \u2265 ${minScore} in the last 60 trading days.
+    body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:34px;color:var(--mute)">
+      No signals match the current filters in the last 60 trading days.
     </td></tr>`;
   } else {
     body.innerHTML = sc.map(s => {
@@ -2408,10 +2485,13 @@ function renderScorecard() {
       const badge = s.ret >= 0
         ? `<span class="sc-badge sc-badge-win">+${s.ret.toFixed(2)}%</span>`
         : `<span class="sc-badge sc-badge-loss">${s.ret.toFixed(2)}%</span>`;
+      const erBadge = s.er
+        ? `<span style="background:rgba(245,158,11,.15);color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;margin-left:5px;vertical-align:middle" title="Results within \u00b110d of signal${s.erd ? ' (' + s.erd + ')' : ''}">ER</span>`
+        : '';
       // Format dates as DD Mon
       const fmtD = d => { const p = d.split("-"); const m = ["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+p[1]]; return `${+p[2]} ${m}`; };
       return `<tr>
-        <td><a href="#" onclick="event.preventDefault();setTab('wl');addTickerDirect('${s.t}')" style="color:var(--blue);text-decoration:none;font-weight:600">${s.t}</a></td>
+        <td><a href="#" onclick="event.preventDefault();setTab('wl');addTickerDirect('${s.t}')" style="color:var(--blue);text-decoration:none;font-weight:600">${s.t}</a>${erBadge}</td>
         <td style="color:var(--mute);font-size:12px">${s.n}</td>
         <td style="text-align:center"><span style="background:rgba(59,130,246,.12);padding:2px 6px;border-radius:4px;font-size:11px;font-weight:600">${s.ss.toFixed(1)}</span></td>
         <td>${fmtD(s.sd)}</td>
@@ -2773,6 +2853,16 @@ def main():
     scorecard   = build_scorecard(data, df)
     scorecard_w = build_weekly_scorecard(data, df)
     print(f"Signal Scorecard: {len(scorecard)} daily / {len(scorecard_w)} weekly signals in last {SCORECARD_LOOKBACK} days")
+
+    # Flag signals near earnings/results announcements (±10 calendar days)
+    all_sc_tickers = list(set(s["t"] for s in scorecard + scorecard_w))
+    if all_sc_tickers:
+        earnings_map = _fetch_earnings_dates(all_sc_tickers)
+        _flag_earnings_proximity(scorecard, earnings_map)
+        _flag_earnings_proximity(scorecard_w, earnings_map)
+        er_d = sum(1 for s in scorecard   if s.get("er"))
+        er_w = sum(1 for s in scorecard_w if s.get("er"))
+        print(f"  Earnings-proximate signals: {er_d} daily, {er_w} weekly")
 
     xlsx_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.xlsx"
     html_path  = OUT_DIR / f"AM_Watch_Scanner_{STAMP}.html"
